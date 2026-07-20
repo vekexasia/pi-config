@@ -2,6 +2,7 @@
 /*
 !/.gitignore
 !/.pii-allowlist
+!/AGENTS.md
 !/README.md
 !/package.json
 !/settings.json
