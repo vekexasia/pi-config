@@ -248,6 +248,7 @@ export default function (pi) {
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let rootSession = false;
+  const activeAsyncRuns = new Set<string>();
 
   function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
     if (timer) {
@@ -275,7 +276,7 @@ export default function (pi) {
     if (failureBlocked) {
       return { state: "blocked" as const, message: failureMessage };
     }
-    if (agentActive || retryHoldActive) {
+    if (agentActive || retryHoldActive || activeAsyncRuns.size > 0) {
       return { state: "working" as const, message: undefined };
     }
     return { state: "idle" as const, message: undefined };
@@ -317,6 +318,46 @@ export default function (pi) {
     retryTimer.unref?.();
   }
 
+  const asyncRunId = (data: any) =>
+    typeof data?.id === "string" && data.id.length > 0
+      ? data.id
+      : typeof data?.runId === "string" && data.runId.length > 0
+        ? data.runId
+        : undefined;
+
+  const matchesCurrentSession = (data: any) =>
+    !currentAgentSessionId || data?.sessionId === currentAgentSessionId;
+
+  const asyncStarted = (data: any) => {
+    const runId = asyncRunId(data);
+    if (!rootSession || !runId || !matchesCurrentSession(data) || activeAsyncRuns.has(runId)) {
+      return;
+    }
+    clearTimer(idleTimer);
+    idleTimer = undefined;
+    activeAsyncRuns.add(runId);
+    publishState();
+  };
+
+  const asyncComplete = (data: any) => {
+    const runId = asyncRunId(data);
+    if (!rootSession || !runId || !matchesCurrentSession(data) || !activeAsyncRuns.delete(runId)) {
+      return;
+    }
+    publishState();
+  };
+
+  pi.events.on("subagent:async-started", asyncStarted);
+  pi.events.on("subagent:async-complete", asyncComplete);
+  for (const event of ["workflow:run-started", "workflow:run-resumed"]) {
+    pi.events.on(event, asyncStarted);
+  }
+  pi.events.on("workflow:run-state-changed", (data) => {
+    if (["completed", "failed", "stopped", "interrupted", "budget_exhausted"].includes(data?.state)) {
+      asyncComplete(data);
+    }
+  });
+
   pi.events.on("herdr:blocked", (data) => {
     if (!rootSession) {
       return;
@@ -340,6 +381,7 @@ export default function (pi) {
     if (ctx?.hasUI !== true) {
       return;
     }
+    activeAsyncRuns.clear();
     rootSession = true;
     updateSessionRef(ctx);
     void reportSession();
