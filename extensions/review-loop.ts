@@ -3,7 +3,7 @@ import {
   type JsonSchema,
   type JsonValue,
   type WorkflowExtension,
-} from "/home/andrea/git/personale/pi-workflows/dist/src/index.js";
+} from "../../../git/personale/pi-workflows/dist/src/index.js";
 
 const inputSchema: JsonSchema = {
   type: "object",
@@ -40,10 +40,12 @@ const outputSchema: JsonSchema = {
 export const reviewLoopExtension: WorkflowExtension = {
   version: "1.0.0",
   headline: "Developer-review loop",
-  description: "Runs developer and reviewer agents in a loop until review passes.",
+  description:
+    "Runs developer and reviewer agents in a loop until review passes.",
   functions: {
     developUntilApproved: {
-      description: "Run developer and reviewer agents until review passes or the iteration limit is reached",
+      description:
+        "Run developer and reviewer agents until review passes or the iteration limit is reached",
       input: inputSchema,
       output: outputSchema,
       async run(input, { agent, prompt }) {
@@ -55,16 +57,27 @@ export const reviewLoopExtension: WorkflowExtension = {
         let review: JsonValue = { pass: false };
 
         for (let iterations = 1; iterations <= maxIterations; iterations += 1) {
-          const devPrompt = iterations === 1
-            ? prompt("Implement this task:\n\n{task}", { task })
-            : prompt("Address the previous review findings and complete the task.\n\nTask:\n{task}\n\nPrevious review:\n{review}", { task, review });
+          const devPrompt =
+            iterations === 1
+              ? prompt("Implement this task:\n\n{task}", { task })
+              : prompt(
+                  "Address the previous review findings and complete the task.\n\nTask:\n{task}\n\nPrevious review:\n{review}",
+                  { task, review },
+                );
           devResult = await agent(devPrompt, { role: "developer" });
-          review = await agent(prompt("Review the implementation against the task. Set pass=true only when the task is complete and correct.\n\nTask:\n{task}\n\nDeveloper result:\n{devResult}", { task, devResult }), {
-            role: "reviewer",
-            outputSchema: reviewSchema,
-          });
+          review = await agent(
+            prompt(
+              "Review the implementation against the task. Set pass=true only when the task is complete and correct.\n\nTask:\n{task}\n\nDeveloper result:\n{devResult}",
+              { task, devResult },
+            ),
+            {
+              role: "reviewer",
+              outputSchema: reviewSchema,
+            },
+          );
 
-          if ((review as { pass: boolean }).pass) return { pass: true, iterations, devResult, review };
+          if ((review as { pass: boolean }).pass)
+            return { pass: true, iterations, devResult, review };
         }
 
         return { pass: false, iterations: maxIterations, devResult, review };

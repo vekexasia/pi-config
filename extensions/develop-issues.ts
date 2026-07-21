@@ -3,7 +3,7 @@ import {
   type JsonSchema,
   type JsonValue,
   type WorkflowExtension,
-} from "/home/andrea/git/personale/pi-workflows/dist/src/index.js";
+} from "../../../git/personale/pi-workflows/dist/src/index.js";
 
 const reviewSchema: JsonSchema = {
   type: "object",
@@ -27,18 +27,24 @@ const loopResultSchema: JsonSchema = {
   additionalProperties: false,
 };
 
-
 export const developIssuesExtension: WorkflowExtension = {
   version: "1.0.0",
   headline: "Parallel issue development",
-  description: "Develops GitHub issues in isolated worktrees, merges approved results, and summarizes the work.",
+  description:
+    "Develops GitHub issues in isolated worktrees, merges approved results, and summarizes the work.",
   functions: {
     developIssuesUntilApproved: {
-      description: "Develop issue numbers in parallel worktrees, merge them into main after review, then summarize the result",
+      description:
+        "Develop issue numbers in parallel worktrees, merge them into main after review, then summarize the result",
       input: {
         type: "object",
         properties: {
-          issues: { type: "array", minItems: 1, uniqueItems: true, items: { type: "integer", minimum: 1 } },
+          issues: {
+            type: "array",
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: "integer", minimum: 1 },
+          },
           maxIterations: { type: "integer", minimum: 1 },
         },
         required: ["issues"],
@@ -48,7 +54,10 @@ export const developIssuesExtension: WorkflowExtension = {
         type: "object",
         properties: {
           issues: { type: "array", items: { type: "integer" } },
-          issueResults: { type: "object", additionalProperties: loopResultSchema },
+          issueResults: {
+            type: "object",
+            additionalProperties: loopResultSchema,
+          },
           merge: { anyOf: [loopResultSchema, { type: "null" }] },
           summary: {},
         },
@@ -61,37 +70,58 @@ export const developIssuesExtension: WorkflowExtension = {
         const tasks: Record<string, () => Promise<JsonValue>> = {};
 
         for (const issue of issues) {
-          tasks[`issue-${String(issue)}`] = () => context.withWorktree(`issue-${String(issue)}`, () => context.invoke("developUntilApproved", {
-            task: `Resolve issue #${String(issue)} in the current repository. Read the issue with appropriate cli (gh or glab), implement the root-cause fix, run the relevant tests, commit every change, and report the commit SHA.`,
-            maxIterations,
-          }));
+          tasks[`issue-${String(issue)}`] = () =>
+            context.withWorktree(`issue-${String(issue)}`, () =>
+              context.invoke("developUntilApproved", {
+                task: `Resolve issue #${String(issue)} in the current repository. Read the issue with appropriate cli (gh or glab), implement the root-cause fix, run the relevant tests, commit every change, and report the commit SHA.`,
+                maxIterations,
+              }),
+            );
         }
 
         context.phase("issues");
-        context.log(`Developing ${String(issues.length)} issue(s) in parallel worktrees`);
+        context.log(
+          `Developing ${String(issues.length)} issue(s) in parallel worktrees`,
+        );
         const issueResults = await context.parallel("issues", tasks);
-        const entries = Object.entries(issueResults as Record<string, JsonValue>);
-        const approvedResults = Object.fromEntries(entries.filter(([, result]) => (result as { pass?: boolean }).pass));
-        const failedResults = Object.fromEntries(entries.filter(([, result]) => !(result as { pass?: boolean }).pass));
+        const entries = Object.entries(
+          issueResults as Record<string, JsonValue>,
+        );
+        const approvedResults = Object.fromEntries(
+          entries.filter(([, result]) => (result as { pass?: boolean }).pass),
+        );
+        const failedResults = Object.fromEntries(
+          entries.filter(([, result]) => !(result as { pass?: boolean }).pass),
+        );
         const failed = Object.keys(failedResults);
-        if (failed.length > 0) context.log(`Skipping failed issue worktrees: ${failed.join(", ")}\n${JSON.stringify(failedResults)}`);
+        if (failed.length > 0)
+          context.log(
+            `Skipping failed issue worktrees: ${failed.join(", ")}\n${JSON.stringify(failedResults)}`,
+          );
 
         let merge: JsonValue = null;
         if (Object.keys(approvedResults).length > 0) {
           context.phase("merge");
           context.log("Merging approved issue worktrees into main");
           merge = await context.invoke("developUntilApproved", {
-            task: context.prompt("Merge only the approved issue worktrees into the current main working tree. Do not merge failed issue worktrees. Inspect git worktree list and the reported commits, merge the approved branches, resolve conflicts, run the full relevant test suite, commit the merge result, and leave the current working tree clean.\n\nApproved issue results:\n{approvedResults}\n\nFailed issue worktrees to skip:\n{failed}", { approvedResults, failed }),
+            task: context.prompt(
+              "Merge only the approved issue worktrees into the current main working tree. Do not merge failed issue worktrees. Inspect git worktree list and the reported commits, merge the approved branches, resolve conflicts, run the full relevant test suite, commit the merge result, and leave the current working tree clean.\n\nApproved issue results:\n{approvedResults}\n\nFailed issue worktrees to skip:\n{failed}",
+              { approvedResults, failed },
+            ),
             maxIterations,
           });
-          if (!(merge as { pass?: boolean }).pass) throw new Error("Merged result failed review");
+          if (!(merge as { pass?: boolean }).pass)
+            throw new Error("Merged result failed review");
         } else {
           context.log("No approved issue worktrees to merge");
         }
 
         context.phase("summary");
         const summary = await context.agent(
-          context.prompt("Summarize what succeeded, what failed review, what was tested, and what was merged. Do not change files.\n\nIssues:\n{issues}\n\nIssue results:\n{issueResults}\n\nFailed issues:\n{failed}\n\nMerge result:\n{merge}", { issues, issueResults, failed, merge }),
+          context.prompt(
+            "Summarize what succeeded, what failed review, what was tested, and what was merged. Do not change files.\n\nIssues:\n{issues}\n\nIssue results:\n{issueResults}\n\nFailed issues:\n{failed}\n\nMerge result:\n{merge}",
+            { issues, issueResults, failed, merge },
+          ),
           { role: "scout", label: "resumer" },
         );
 
@@ -101,7 +131,8 @@ export const developIssuesExtension: WorkflowExtension = {
   },
   workflows: {
     developIssues: {
-      description: "Develop GitHub issues in parallel, merge approved work into main, and return a final summary",
+      description:
+        "Develop GitHub issues in parallel, merge approved work into main, and return a final summary",
       script: "return developIssuesUntilApproved(args);",
     },
   },
