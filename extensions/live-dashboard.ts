@@ -29,12 +29,9 @@ interface ToolEntry {
 function toolDetail(name: string, args: any): string {
   if (!args) return "";
   const p = args.path ?? args.file_path ?? args.filePath;
-  if (p) return String(p).replace(/^\/home\/[^/]+\//, "~/");
-  if (args.command) return String(args.command);
-  if (args.pattern) return String(args.pattern);
-  if (args.query) return String(args.query);
-  if (args.prompt) return String(args.prompt);
-  return "";
+  const detail = p ? String(p).replace(/^\/home\/[^/]+\//, "~/")
+    : args.command || args.pattern || args.query || args.prompt || "";
+  return String(detail).slice(0, 2000);
 }
 
 export default function (pi: ExtensionAPI) {
