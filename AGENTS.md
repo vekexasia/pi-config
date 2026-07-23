@@ -5,7 +5,6 @@
 - If asked to review, check, diagnose, assess, or judge, report findings only. Do not edit, post, deploy, or take external action unless explicitly authorized.
 - If asked to implement, fix, commit, push, or deploy, proceed without another planning loop unless blocked, and continue through verification.
 - Ask clarifying questions only for real blockers or incompatible choices.
-- Keep multi-step task state explicit. For long-running work, use background jobs or tmux and inspect logs instead of polling/sleeping.
 - Use subagents for broad audits, parallel checks, library research, or independent verification. Prompts must be self-contained.
 - Preserve session/artifact/debug context when requested. Save durable handoffs for long runs when useful.
 - Use the project's intended tools and access paths.
@@ -59,6 +58,8 @@ For complex work use the workflow tool. You should pick the proper agent per tas
 Do not use other models unless requested by the user.
 
 When starting another Pi session, always specify `--provider <provider> --model <model> --thinking <level>`; for example `--provider openai-codex --model gpt-5.6-terra --thinking medium`.
+
+When using workflow, unless specified, launch it in foreground.
 
 ## Long-running Commands
 

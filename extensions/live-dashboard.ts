@@ -1,14 +1,23 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
-import { join, basename } from "node:path";
+import { mkdirSync, readFileSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
-// Live dashboard writer: each pi session (including in-process subagents,
-// which get their own extension binding) dumps its state to
-// ~/.pi/live-dashboard/<pid>-<instance>.json for an external dashboard server.
+// Live dashboard reporter: each pi session (including in-process subagents,
+// which get their own extension binding) sends its state to a local dashboard server.
 
-const DIR = join(homedir(), ".pi", "live-dashboard");
+const URL = process.env.PI_LIVE_DASHBOARD_URL ?? "http://127.0.0.1:3939/snapshot";
+const DIR = join(homedir(), ".pi");
+const ENABLED_FILE = join(DIR, "live-dashboard.enabled");
+
+function globallyEnabled(): boolean {
+  try {
+    return readFileSync(ENABLED_FILE, "utf8").trim() === "on";
+  } catch {
+    return false;
+  }
+}
 
 interface ToolEntry {
   name: string;
@@ -30,10 +39,12 @@ function toolDetail(name: string, args: any): string {
 
 export default function (pi: ExtensionAPI) {
   // per-instance state: parent session and each subagent get their own copy
-  // (module scope would be shared within the process and files would clobber)
-  const FILE = join(DIR, `${process.pid}-${randomUUID().slice(0, 8)}.json`);
+  const instanceId = randomUUID();
   const state = {
     pid: process.pid,
+    instanceId,
+    startedAt: 0,
+    revision: 0,
     session: "",
     model: "",
     status: "idle" as "idle" | "working" | "closed",
@@ -45,19 +56,55 @@ export default function (pi: ExtensionAPI) {
     tools: [] as ToolEntry[],
     updatedAt: 0,
   };
+  let enabled = globallyEnabled();
+  let watching = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
 
-  function flush() {
-    state.updatedAt = Date.now();
-    try {
-      writeFileSync(FILE, JSON.stringify(state));
-    } catch {}
+  function syncEnabled() {
+    const next = globallyEnabled();
+    const becameEnabled = next && !enabled;
+    enabled = next;
+    if (becameEnabled) flush();
   }
 
+  function flush() {
+    if (!enabled) return;
+    state.updatedAt = Date.now();
+    state.revision++;
+    return fetch(URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(state),
+      signal: AbortSignal.timeout(2_000),
+    }).catch(() => {});
+  }
+
+  pi.registerCommand("live-dashboard", {
+    description: "Enable live-dashboard telemetry globally; use 'off' to disable",
+    handler: async (args, ctx) => {
+      const action = args.trim().toLowerCase();
+      if (action !== "" && action !== "on" && action !== "off") {
+        ctx.ui.notify("Usage: /live-dashboard [on|off]", "warning");
+        return;
+      }
+      mkdirSync(DIR, { recursive: true });
+      writeFileSync(ENABLED_FILE, action === "off" ? "off\n" : "on\n");
+      syncEnabled();
+      ctx.ui.notify(`Live-dashboard telemetry ${enabled ? "enabled" : "disabled"} globally`, "info");
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
-    mkdirSync(DIR, { recursive: true });
+    state.startedAt = Date.now();
     state.session = basename(ctx.sessionManager.getCwd() || "pi");
-    flush();
+    if (!watching) {
+      watchFile(ENABLED_FILE, { interval: 500, persistent: false }, syncEnabled);
+      watching = true;
+    }
+    syncEnabled();
     sniffAdvisorCost(ctx);
+    void flush();
+    heartbeat ??= setInterval(() => { void flush(); }, 10_000);
   });
 
   // The omplike advisor runs its own in-process Agent (direct provider stream,
@@ -111,9 +158,16 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_shutdown", async () => {
-    // keep the file: final counters must survive so the live total doesn't drop
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = undefined;
+    }
     state.status = "closed";
-    flush();
+    await flush();
+    if (watching) {
+      unwatchFile(ENABLED_FILE, syncEnabled);
+      watching = false;
+    }
   });
 
   pi.on("agent_start", async () => {

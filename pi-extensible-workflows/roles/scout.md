@@ -1,5 +1,5 @@
 ---
-model: reviewer-model
+model: scout-model
 tools: [read, grep, find, bash, web_search, get_search_content, fetch_content]
 description: Scouting agent. Use when we need to gather info to solve a task
 ---

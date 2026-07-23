@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.80.10",
+  "lastChangelogVersion": "0.81.1",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "high",
@@ -25,11 +25,11 @@
     "git:github.com/pasky/pi-omplike-advisor",
     "npm:pi-tool-display",
     "git:github.com/YuGiMob/pi-hashline-edit-pro",
-    "git:github.com/vekexasia/pi-phone",
     "git:github.com/vekexasia/pi-notify@feat/customizable-notifications",
     "npm:@sting8k/pi-vcc",
     "../../git/personale/pi-workflows",
-    "npm:pi-orcarouter"
+    "npm:pi-orcarouter",
+    "npm:@plannotator/pi-extension"
   ],
   "skills": [
     "-skills/browser-use"

@@ -16,3 +16,4 @@ Rules:
 - Run the smallest relevant verification command and report it.
 - If blocked, state the blocker and the exact command or file that proves it.
 - When developing something new or changing something existing evaluate also documentation that needs updating
+- Use TDD (red -> green) to work.

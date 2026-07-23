@@ -1,41 +1,17 @@
+import { Type, type Static } from "typebox";
 import {
   registerWorkflowExtension,
-  type JsonSchema,
   type JsonValue,
   type WorkflowExtension,
 } from "../../../git/personale/pi-workflows/dist/src/index.js";
 
-const inputSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    task: { type: "string" },
-    maxIterations: { type: "integer", minimum: 1 },
+const inputSchema = Type.Object(
+  {
+    task: Type.String(),
+    maxIterations: Type.Optional(Type.Integer({ minimum: 1 })),
   },
-  required: ["task"],
-  additionalProperties: false,
-};
-
-const reviewSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean" },
-    findings: { type: "array", items: { type: "string" } },
-  },
-  required: ["pass", "findings"],
-  additionalProperties: false,
-};
-
-const outputSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean" },
-    iterations: { type: "integer" },
-    devResult: {},
-    review: { type: "object" },
-  },
-  required: ["pass", "iterations", "devResult", "review"],
-  additionalProperties: false,
-};
+  { additionalProperties: false },
+);
 
 export const reviewLoopExtension: WorkflowExtension = {
   version: "1.0.0",
@@ -47,12 +23,18 @@ export const reviewLoopExtension: WorkflowExtension = {
       description:
         "Run developer and reviewer agents until review passes or the iteration limit is reached",
       input: inputSchema,
-      output: outputSchema,
+      output: Type.Object(
+        {
+          pass: Type.Boolean(),
+          iterations: Type.Integer(),
+          devResult: Type.Any(),
+          review: Type.Object({}),
+        },
+        { additionalProperties: false },
+      ),
       async run(input, { agent, prompt }) {
-        const { task, maxIterations = 5 } = input as unknown as {
-          task: string;
-          maxIterations?: number;
-        };
+        const { task, maxIterations = 5 } =
+          input as unknown as Static<typeof inputSchema>;
         let devResult: JsonValue = null;
         let review: JsonValue = { pass: false };
 
@@ -72,7 +54,13 @@ export const reviewLoopExtension: WorkflowExtension = {
             ),
             {
               role: "reviewer",
-              outputSchema: reviewSchema,
+              outputSchema: Type.Object(
+                {
+                  pass: Type.Boolean(),
+                  findings: Type.Array(Type.String()),
+                },
+                { additionalProperties: false },
+              ),
             },
           );
 

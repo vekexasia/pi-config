@@ -1,31 +1,108 @@
+import { Type, type Static } from "typebox";
 import {
   registerWorkflowExtension,
-  type JsonSchema,
   type JsonValue,
+  type ShellResult,
   type WorkflowExtension,
+  type WorkflowFunctionContext,
+  type WorkflowWorktreeReference,
 } from "../../../git/personale/pi-workflows/dist/src/index.js";
 
-const reviewSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean" },
-    findings: { type: "array", items: { type: "string" } },
+const loopResultSchema = Type.Object(
+  {
+    pass: Type.Boolean(),
+    iterations: Type.Integer(),
+    devResult: Type.Any(),
+    review: Type.Object(
+      {
+        pass: Type.Boolean(),
+        findings: Type.Array(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
   },
-  required: ["pass", "findings"],
-  additionalProperties: false,
+  { additionalProperties: false },
+);
+
+const issueResultSchema = Type.Object(
+  {
+    devRes: loopResultSchema,
+    worktree: Type.Object(
+      {
+        path: Type.String(),
+        branch: Type.String(),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+type IssueResult = Static<typeof issueResultSchema>;
+
+type WorktreeCleanup = {
+  removed: string[];
+  skipped: string[];
+  failed: string[];
 };
 
-const loopResultSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean" },
-    iterations: { type: "integer" },
-    devResult: {},
-    review: reviewSchema,
-  },
-  required: ["pass", "iterations", "devResult", "review"],
-  additionalProperties: false,
-};
+function shellFailure(name: string, result: ShellResult): string {
+  const detail =
+    result.stderr || result.stdout || `git exited ${String(result.exitCode)}`;
+  return `${name}: ${detail.trim()}`;
+}
+
+async function cleanupMergedWorktrees(
+  shell: WorkflowFunctionContext["shell"],
+  references: readonly WorkflowWorktreeReference[],
+): Promise<WorktreeCleanup> {
+  const cleanup: WorktreeCleanup = { removed: [], skipped: [], failed: [] };
+
+  for (const reference of references) {
+    const name = reference.branch;
+    const options = {
+      env: {
+        PI_WORKTREE_BRANCH: reference.branch,
+        PI_WORKTREE_PATH: reference.path,
+      },
+    };
+    const ancestry = await shell(
+      'git merge-base --is-ancestor "$PI_WORKTREE_BRANCH" HEAD',
+      options,
+    );
+
+    if (ancestry.exitCode === 1) {
+      cleanup.skipped.push(`${name}: not merged`);
+      continue;
+    }
+    if (ancestry.exitCode !== 0) {
+      cleanup.failed.push(shellFailure(name, ancestry));
+      continue;
+    }
+
+    const status = await shell(
+      'git -C "$PI_WORKTREE_PATH" status --porcelain',
+      options,
+    );
+    if (status.exitCode !== 0) {
+      cleanup.failed.push(shellFailure(name, status));
+      continue;
+    }
+    if (status.stdout.trim()) {
+      cleanup.skipped.push(`${name}: dirty`);
+      continue;
+    }
+
+    const removal = await shell(
+      'git worktree remove "$PI_WORKTREE_PATH"',
+      options,
+    );
+    if (removal.exitCode === 0) cleanup.removed.push(name);
+    else cleanup.failed.push(shellFailure(name, removal));
+  }
+
+  return cleanup;
+}
 
 export const developIssuesExtension: WorkflowExtension = {
   version: "1.0.0",
@@ -36,104 +113,143 @@ export const developIssuesExtension: WorkflowExtension = {
     developIssuesUntilApproved: {
       description:
         "Develop issue numbers in parallel worktrees, merge them into main after review, then summarize the result",
-      input: {
-        type: "object",
-        properties: {
-          issues: {
-            type: "array",
+      input: Type.Object(
+        {
+          issues: Type.Array(Type.Integer({ minimum: 1 }), {
             minItems: 1,
             uniqueItems: true,
-            items: { type: "integer", minimum: 1 },
-          },
-          maxIterations: { type: "integer", minimum: 1 },
+          }),
+          maxIterations: Type.Optional(Type.Integer({ minimum: 1 })),
         },
-        required: ["issues"],
-        additionalProperties: false,
-      },
-      output: {
-        type: "object",
-        properties: {
-          issues: { type: "array", items: { type: "integer" } },
-          issueResults: {
-            type: "object",
-            additionalProperties: loopResultSchema,
-          },
-          merge: { anyOf: [loopResultSchema, { type: "null" }] },
-          summary: {},
+        { additionalProperties: false },
+      ),
+      output: Type.Object(
+        {
+          issues: Type.Array(Type.Integer()),
+          issueResults: Type.Object(
+            {},
+            { additionalProperties: issueResultSchema },
+          ),
+          merge: Type.Union([loopResultSchema, Type.Null()]),
+          summary: Type.Any(),
         },
-        required: ["issues", "issueResults", "merge", "summary"],
-        additionalProperties: false,
-      },
-      async run(input, context) {
+        { additionalProperties: false },
+      ),
+      async run(
+        input,
+        { agent, log, invoke, phase, shell, parallel, prompt, withWorktree },
+      ) {
         const issues = input.issues as number[];
         const maxIterations = (input.maxIterations as number | undefined) ?? 5;
         const tasks: Record<string, () => Promise<JsonValue>> = {};
 
         for (const issue of issues) {
-          tasks[`issue-${String(issue)}`] = () =>
-            context.withWorktree(`issue-${String(issue)}`, () =>
-              context.invoke("developUntilApproved", {
-                task: `Resolve issue #${String(issue)} in the current repository. Read the issue with appropriate cli (gh or glab), implement the root-cause fix, run the relevant tests, commit every change, and report the commit SHA.`,
+          tasks[`issue-${issue}`] = () =>
+            withWorktree(`issue-${issue}`, async (worktree) => {
+              const devRes = await invoke("developUntilApproved", {
+                task: `Resolve issue #${issue} in the current repository. Read the issue with appropriate cli (gh or glab), final commit should reference the issue.`,
                 maxIterations,
-              }),
-            );
+              });
+
+              return { devRes, worktree };
+            });
         }
 
-        context.phase("issues");
-        context.log(
-          `Developing ${String(issues.length)} issue(s) in parallel worktrees`,
-        );
-        const issueResults = await context.parallel("issues", tasks);
+        phase("issues");
+        log(`Developing ${issues.length} issue(s) in parallel worktrees`);
+        const issueResults = await parallel("issues", tasks);
         const entries = Object.entries(
-          issueResults as Record<string, JsonValue>,
+          issueResults as Record<string, IssueResult>,
         );
-        const approvedResults = Object.fromEntries(
-          entries.filter(([, result]) => (result as { pass?: boolean }).pass),
+        const approvedEntries = entries.filter(
+          ([, result]) => result.devRes.pass,
         );
-        const failedResults = Object.fromEntries(
-          entries.filter(([, result]) => !(result as { pass?: boolean }).pass),
+        const failedEntries = entries.filter(
+          ([, result]) => !result.devRes.pass,
         );
-        const failed = Object.keys(failedResults);
-        if (failed.length > 0)
-          context.log(
-            `Skipping failed issue worktrees: ${failed.join(", ")}\n${JSON.stringify(failedResults)}`,
+        const approvedResults = Object.fromEntries(approvedEntries);
+        const failedResults = Object.fromEntries(failedEntries);
+        const failedIssueNames = Object.keys(failedResults);
+
+        if (failedIssueNames.length > 0)
+          log(
+            `Skipping failed issue worktrees: ${failedIssueNames.join(", ")}\n${JSON.stringify(failedResults)}`,
           );
 
+        const approvedWorktrees = approvedEntries.map(
+          ([, result]) => result.worktree,
+        );
+
         let merge: JsonValue = null;
-        if (Object.keys(approvedResults).length > 0) {
-          context.phase("merge");
-          context.log("Merging approved issue worktrees into main");
-          merge = await context.invoke("developUntilApproved", {
-            task: context.prompt(
-              "Merge only the approved issue worktrees into the current main working tree. Do not merge failed issue worktrees. Inspect git worktree list and the reported commits, merge the approved branches, resolve conflicts, run the full relevant test suite, commit the merge result, and leave the current working tree clean.\n\nApproved issue results:\n{approvedResults}\n\nFailed issue worktrees to skip:\n{failed}",
-              { approvedResults, failed },
-            ),
-            maxIterations,
-          });
+        if (approvedWorktrees.length > 0) {
+          phase("merge");
+          log("Merging approved issue worktrees into main");
+          let mergeFailure: unknown = null;
+          try {
+            merge = await invoke("developUntilApproved", {
+              task: prompt(
+                `Merge only the approved issue worktrees into the current main working tree.
+Do not merge failed issue worktrees. Use each approved result's worktree to
+identify the exact branch and path, merge the approved branches, resolve conflicts,
+run the full relevant test suite, commit the merge result, and leave the current
+working tree clean.
+
+Approved issue results:
+{approvedResults}
+Failed issue worktrees to skip:
+{failedIssueNames}`,
+                {
+                  approvedResults,
+                  failedIssueNames,
+                },
+              ),
+              maxIterations,
+            });
+          } catch (error) {
+            mergeFailure = error;
+          }
+
+          const cleanup = await cleanupMergedWorktrees(
+            shell,
+            approvedWorktrees,
+          );
+          log(`Approved worktree cleanup: ${JSON.stringify(cleanup)}`);
+
+          if (mergeFailure !== null) throw mergeFailure;
+          if (cleanup.failed.length > 0)
+            throw new Error(
+              `Worktree cleanup failed: ${cleanup.failed.join("; ")}`,
+            );
           if (!(merge as { pass?: boolean }).pass)
             throw new Error("Merged result failed review");
         } else {
-          context.log("No approved issue worktrees to merge");
+          log("No approved issue worktrees to merge");
         }
 
-        context.phase("summary");
-        const summary = await context.agent(
-          context.prompt(
-            "Summarize what succeeded, what failed review, what was tested, and what was merged. Do not change files.\n\nIssues:\n{issues}\n\nIssue results:\n{issueResults}\n\nFailed issues:\n{failed}\n\nMerge result:\n{merge}",
-            { issues, issueResults, failed, merge },
+        phase("summary");
+        const summary = await agent(
+          prompt(
+            `Summarize what succeeded, what failed review, what was tested, and what
+was merged. Do not change files.
+
+Issues:
+{issues}
+
+Issue results:
+{issueResults}
+
+Failed issues:
+{failedIssueNames}
+
+Merge result:
+{merge}`,
+            { issues, issueResults, failedIssueNames, merge },
           ),
-          { role: "scout", label: "resumer" },
+          { role: "summarizer" },
         );
 
         return { issues, issueResults, merge, summary };
       },
-    },
-  },
-  workflows: {
-    developIssues: {
-      description:
-        "Develop GitHub issues in parallel, merge approved work into main, and return a final summary",
-      script: "return developIssuesUntilApproved(args);",
     },
   },
 };
