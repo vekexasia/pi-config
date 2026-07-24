@@ -2,10 +2,10 @@
   "name": "pi-extensions",
   "private": true,
   "dependencies": {
-    "@narumitw/pi-goal": "^0.24.0",
+    "@narumitw/pi-goal": "^0.27.2",
     "@plannotator/pi-extension": "^0.24.2",
     "@sting8k/pi-vcc": "^0.4.0",
-    "@tintinweb/pi-subagents": "^0.14.2",
+    "@tintinweb/pi-subagents": "^0.14.3",
     "pi-anthropic-oauth": "^0.2.0",
     "pi-btw": "^0.4.1",
     "pi-markdown-preview": "^0.10.1",
