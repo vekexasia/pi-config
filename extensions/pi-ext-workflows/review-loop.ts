@@ -3,7 +3,7 @@ import {
   registerWorkflowExtension,
   type JsonValue,
   type WorkflowExtension,
-} from "../../../git/personale/pi-workflows/dist/src/index.js";
+} from "../../../../git/personale/pi-workflows/dist/src/index.js";
 
 const inputSchema = Type.Object(
   {
@@ -33,8 +33,9 @@ export const reviewLoopExtension: WorkflowExtension = {
         { additionalProperties: false },
       ),
       async run(input, { agent, prompt }) {
-        const { task, maxIterations = 5 } =
-          input as unknown as Static<typeof inputSchema>;
+        const { task, maxIterations = 5 } = input as unknown as Static<
+          typeof inputSchema
+        >;
         let devResult: JsonValue = null;
         let review: JsonValue = { pass: false };
 
