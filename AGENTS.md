@@ -35,17 +35,13 @@
 ## Workflow and agents
 
 For complex work use the workflow tool. You should pick the proper agent per task unless specified. Check model aliases.
-
 Do not use other models unless requested by the user.
 
-Before calling workflow tool design the script and save it in a temp folder. Then launch `nvim` on it to let operator inspect and change its content.
-
-After operator exits nvim you can launch the workflow tool with `scriptPath`
-
-When starting another Pi session, always specify `--provider <provider> --model <model> --thinking <level>`; for example `--provider openai-codex --model gpt-5.6-terra --thinking medium`.
+Right before calling workflow tool, design the script that will be then passed to workflow's `script` param and save it in /tmp. Then call `~/.pi/agent/bin/open-nvim.sh <path_to_file>` so the operator can view & edit the script. never revert or fix operators changes. the `open-nvim` binary will automatically wait until the operator finishes its review. Await for operator instructions.
 
 When using workflow, unless specified, launch it in foreground and without any kind of budget limits.
 
+## Other preferences
 Also:
 - Prefer herdr for long-running interactive commands that need to survive context switches.
 - Name sessions clearly, capture logs, and inspect output instead of polling/sleeping.

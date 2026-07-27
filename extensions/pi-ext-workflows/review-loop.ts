@@ -3,7 +3,7 @@ import {
   registerWorkflowExtension,
   type JsonValue,
   type WorkflowExtension,
-} from "../../../../git/personale/pi-workflows/dist/src/index.js";
+} from "../../../../git/personale/pi-workflows/packages/core/dist/src/index.js";
 
 const inputSchema = Type.Object(
   {
@@ -44,14 +44,19 @@ export const reviewLoopExtension: WorkflowExtension = {
             iterations === 1
               ? prompt("Implement this task:\n\n{task}", { task })
               : prompt(
-                  "Address the previous review findings and complete the task.\n\nTask:\n{task}\n\nPrevious review:\n{review}",
-                  { task, review },
+                  `Address the previous review findings and complete the task.
+<original_task>{task}</original_task>
+<last_review>{review}</last_review>`,
+                  { task, review: review?.findings ?? "" },
                 );
           devResult = await agent(devPrompt, { role: "developer" });
           review = await agent(
             prompt(
-              "Review the implementation against the task. Set pass=true only when the task is complete and correct.\n\nTask:\n{task}\n\nDeveloper result:\n{devResult}",
-              { task, devResult },
+              `Review the implementation against the task. Set pass=true only when the task is complete and correct. The developer may have addressed a previous review run of yours. So its summary is related to the last round of review if present.
+<original_task>{task}</original_task>
+<last_review>{review}</last_review>
+<dev_summary>{devResult}</dev_summary>`,
+              { task, devResult, review: review?.findings ?? "" },
             ),
             {
               role: "reviewer",

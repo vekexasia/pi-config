@@ -6,7 +6,7 @@ import {
   type WorkflowExtension,
   type WorkflowFunctionContext,
   type WorkflowWorktreeReference,
-} from "../../../../git/personale/pi-workflows/dist/src/index.js";
+} from "../../../../git/personale/pi-workflows/packages/core/dist/src/index.js";
 
 const loopResultSchema = Type.Object(
   {
@@ -50,6 +50,76 @@ function shellFailure(name: string, result: ShellResult): string {
   const detail =
     result.stderr || result.stdout || `git exited ${String(result.exitCode)}`;
   return `${name}: ${detail.trim()}`;
+}
+
+type IssueDetailResult = {
+  title: string;
+  content: string;
+  comments: Array<{ author: string; comment: string }>;
+};
+async function getIssueDetail(
+  shell: WorkflowFunctionContext["shell"],
+  issueId: number,
+): Promise<IssueDetailResult> {
+  const options = { env: { PI_ISSUE_ID: String(issueId) } };
+  const ghResult = await shell(
+    'gh issue view "$PI_ISSUE_ID" --json title,body,comments',
+    options,
+  );
+  let result = ghResult;
+  if (result.exitCode !== 0) {
+    const glabResult = await shell(
+      'glab issue view "$PI_ISSUE_ID" --comments --output json',
+      options,
+    );
+    if (glabResult.exitCode !== 0)
+      throw new Error(
+        `${shellFailure("gh issue view", ghResult)}; ${shellFailure("glab issue view", glabResult)}`,
+      );
+    result = glabResult;
+  }
+
+  let issue: {
+    title?: unknown;
+    body?: unknown;
+    description?: unknown;
+    comments?: unknown;
+    notes?: unknown;
+  };
+  try {
+    issue = JSON.parse(result.stdout) as typeof issue;
+  } catch {
+    throw new Error(`Issue #${String(issueId)} returned invalid JSON`);
+  }
+
+  if (typeof issue.title !== "string")
+    throw new Error(`Issue #${String(issueId)} is missing a title`);
+  const content = issue.body ?? issue.description ?? "";
+  if (typeof content !== "string")
+    throw new Error(`Issue #${String(issueId)} is missing valid content`);
+
+  const rawComments = issue.comments ?? issue.notes ?? [];
+  if (!Array.isArray(rawComments))
+    throw new Error(`Issue #${String(issueId)} has invalid comments`);
+  const comments = rawComments.map((rawComment) => {
+    if (rawComment === null || typeof rawComment !== "object")
+      throw new Error(`Issue #${String(issueId)} has an invalid comment`);
+    const comment = rawComment as Record<string, unknown>;
+    const authorValue = comment.author;
+    const author =
+      typeof authorValue === "string"
+        ? authorValue
+        : authorValue !== null && typeof authorValue === "object"
+          ? ((authorValue as Record<string, unknown>).login ??
+            (authorValue as Record<string, unknown>).username)
+          : undefined;
+    const body = comment.body ?? comment.comment;
+    if (typeof author !== "string" || typeof body !== "string")
+      throw new Error(`Issue #${String(issueId)} has an invalid comment`);
+    return { author, comment: body };
+  });
+
+  return { title: issue.title, content, comments };
 }
 
 async function cleanupMergedWorktrees(
@@ -112,7 +182,7 @@ export const developIssuesExtension: WorkflowExtension = {
   functions: {
     developIssuesUntilApproved: {
       description:
-        "Develop issue numbers in parallel worktrees, merge them into main after review, then summarize the result",
+        "Develop issue numbers in parallel worktrees, merge them into main after review, then summarize the result. Issue info is automatically fetched",
       input: Type.Object(
         {
           issues: Type.Array(Type.Integer({ minimum: 1 }), {
@@ -146,8 +216,14 @@ export const developIssuesExtension: WorkflowExtension = {
         for (const issue of issues) {
           tasks[`issue-${issue}`] = () =>
             withWorktree(`issue-${issue}`, async (worktree) => {
+              const issueDetail = await getIssueDetail(shell, issue);
               const devRes = await invoke("developUntilApproved", {
-                task: `Resolve issue #${issue} in the current repository. Read the issue with appropriate cli (gh or glab), final commit should reference the issue.`,
+                task: `Resolve issue #${issue} in the current repository. The final commit should reference the issue.
+Issue details:
+<issue_number>${issue}</issue_number>
+<issue_title>${issueDetail.title}</issue_title>
+<issue_content>${issueDetail.content}</issue_content>
+<issue_comments>${JSON.stringify(issueDetail.comments, null, 2)}</issue_comments>`,
                 maxIterations,
               });
 
